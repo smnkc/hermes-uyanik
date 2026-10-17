@@ -17,28 +17,33 @@ jobs:
     timeout-minutes: 3
     env:
       KEY: ${{ secrets.INSTABOX_API_KEY }}
-      M: ${{ secrets.INSTABOX_MACHINE_ID }}
+      IDS: ${{ secrets.INSTABOX_MACHINE_IDS }}
+      M1: ${{ secrets.INSTABOX_MACHINE_ID }}
       API: https://api.instabox.sh/v1/machines
     steps:
-      - name: Durum kontrol, gerekirse baslat, aktivite kaydi
+      - name: Her makine icin durum kontrol, gerekirse baslat, aktivite kaydi
         run: |
           set -u
-          if [ -z "$KEY" ] || [ -z "$M" ]; then echo "INSTABOX_API_KEY / INSTABOX_MACHINE_ID secret eksik"; exit 1; fi
-          state=$(curl -s -m 20 "$API/$M" -H "X-API-Key: $KEY" | jq -r '.state // "unknown"')
-          echo "durum: $state"
-          case "$state" in
-            suspended|stopped|paused)
-              code=$(curl -s -m 20 -o /dev/null -w "%{http_code}" -X POST "$API/$M/start" -H "X-API-Key: $KEY" \
-                -H "Idempotency-Key: gha-start-${GITHUB_RUN_ID}" -H "Content-Type: application/json" -d '{}')
-              echo "start istendi: $code" ;;
-            running)
-              # 20 dk'lik aktivite kirasi: sonraki calismaya kadar idle sayilmaz
-              code=$(curl -s -m 20 -o /dev/null -w "%{http_code}" -X PUT "$API/$M/activity-leases/gha-uyanik" -H "X-API-Key: $KEY" \
-                -H "Content-Type: application/json" -d '{"ttlSeconds":1200}')
-              echo "lease: $code"
-              curl -s -m 50 -X POST "$API/$M/wake" -H "X-API-Key: $KEY" -o /dev/null -w "wake %{http_code}\n" ;;
-            *) echo "islem yok ($state)" ;;
-          esac
+          list="${IDS:-$M1}"
+          if [ -z "$KEY" ] || [ -z "$list" ]; then echo "INSTABOX_API_KEY / INSTABOX_MACHINE_IDS secret eksik"; exit 1; fi
+          i=0
+          for M in $(echo "$list" | tr ',' ' '); do
+            i=$((i+1))
+            state=$(curl -s -m 20 "$API/$M" -H "X-API-Key: $KEY" | jq -r '.state // "unknown"')
+            echo "makine #$i durum: $state"
+            case "$state" in
+              suspended|stopped|paused)
+                code=$(curl -s -m 20 -o /dev/null -w "%{http_code}" -X POST "$API/$M/start" -H "X-API-Key: $KEY" \
+                  -H "Idempotency-Key: gha-start-${GITHUB_RUN_ID}-$i" -H "Content-Type: application/json" -d '{}')
+                echo "  start istendi: $code" ;;
+              running)
+                code=$(curl -s -m 20 -o /dev/null -w "%{http_code}" -X PUT "$API/$M/activity-leases/gha-uyanik" -H "X-API-Key: $KEY" \
+                  -H "Content-Type: application/json" -d '{"ttlSeconds":1200}')
+                echo "  lease: $code"
+                curl -s -m 50 -X POST "$API/$M/wake" -H "X-API-Key: $KEY" -o /dev/null -w "  wake %{http_code}\n" ;;
+              *) echo "  islem yok ($state)" ;;
+            esac
+          done
 
   keepalive:
     if: github.event.schedule == '17 3 1 * *' || github.event_name == 'workflow_dispatch'
