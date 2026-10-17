@@ -1,0 +1,35 @@
+name: hermes-uyanik
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # her 30 dk (private repo: ~1440 dk/ay, 2000 ucretsiz limit icinde)
+  workflow_dispatch: {}
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      KEY: ${{ secrets.INSTABOX_API_KEY }}
+      M: m_agqulun2aqaktklrcopfnw44va
+      API: https://api.instabox.sh/v1/machines
+    steps:
+      - name: Durum kontrol, gerekirse baslat, aktivite kaydi
+        run: |
+          set -u
+          if [ -z "$KEY" ]; then echo "INSTABOX_API_KEY secret eksik"; exit 1; fi
+          state=$(curl -s -m 20 "$API/$M" -H "X-API-Key: $KEY" | jq -r '.state // "unknown"')
+          echo "durum: $state"
+          case "$state" in
+            suspended|stopped|paused)
+              curl -s -m 20 -X POST "$API/$M/start" -H "X-API-Key: $KEY" \
+                -H "Idempotency-Key: gha-start-${GITHUB_RUN_ID}" -H "Content-Type: application/json" -d '{}'
+              echo; echo "start istendi" ;;
+            running)
+              # 35 dk'lik aktivite kirasi: sonraki calismaya kadar idle sayilmaz
+              curl -s -m 20 -X PUT "$API/$M/activity-leases/gha-uyanik" -H "X-API-Key: $KEY" \
+                -H "Content-Type: application/json" -d '{"ttlSeconds":2100}'
+              echo
+              curl -s -m 50 -X POST "$API/$M/wake" -H "X-API-Key: $KEY" -o /dev/null -w "wake %{http_code}\n" ;;
+            *) echo "islem yok ($state)" ;;
+          esac
